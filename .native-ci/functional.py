@@ -33,7 +33,10 @@ elif name=='psutil':
     import psutil
     owner=psutil.Process(); before=owner.num_handles()
     script="import os,sys; payload=bytearray(1024*1024); print(os.getpid(),flush=True); sys.stdin.readline(); sys.exit(7)"
-    p=subprocess.Popen([sys.executable,'-c',script],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)
+    # Match upstream's Windows venv-safe spawn: avoid the redirector PID.
+    executable=sys._base_executable
+    env=os.environ.copy();env['__PYVENV_LAUNCHER__']=sys.executable
+    p=subprocess.Popen([executable,'-c',script],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True,env=env)
     try:
         assert int(p.stdout.readline())==p.pid
         child=psutil.Process(p.pid)
@@ -41,7 +44,7 @@ elif name=='psutil':
         with child.oneshot():
             assert child.memory_info().rss>0
             assert child.num_threads()>=1 and child.num_handles()>0
-            assert pathlib.Path(child.exe()).resolve()==pathlib.Path(sys.executable).resolve()
+            assert pathlib.Path(child.exe()).resolve()==pathlib.Path(executable).resolve()
             assert child.cpu_times().user>=0
         assert any(x.pid==p.pid for x in owner.children())
         for _ in range(200):

@@ -51,15 +51,37 @@ run([test,'-m','pip','freeze'])
 run([test,harness/'functional.py',name,version,out/'functional.json'])
 if name=='psutil':
     methods=['test_pid','test_kill','test_terminate','test_send_signal','test_wait_exited','test_wait_timeout','test_wait_timeout_nonblocking','test_cpu_percent','test_cpu_times','test_create_time','test_num_threads','test_num_handles','test_threads','test_memory_info','test_memory_full_info','test_memory_percent','test_is_running','test_exe','test_cmdline','test_name','test_status','test_username','test_cwd','test_ppid','test_parent','test_invalid_pid','test_oneshot','test_oneshot_twice']
-    tests=root/'psutil_tests';shutil.copytree(source/'psutil/tests',tests,dirs_exist_ok=True)
-    # Upstream tests use psutil.tests utilities, shipped in both selected distributions.
-    targets=[f'{tests}/test_process.py::TestProcess::{m}' for m in methods]
+    tests=root/'psutil_tests'
+    source_tests=source/'psutil/tests' if version=='5.9.8' else source/'tests'
+    shutil.copytree(source_tests,tests,dirs_exist_ok=True)
+    # 5.9.8 ships psutil.tests; 7.2.2 uses relative imports from standalone tests.
+    def test_class(method):
+        return 'TestProcessWait' if version=='7.2.2' and method.startswith('test_wait_') else 'TestProcess'
+    targets=[f'{tests}/test_process.py::{test_class(m)}::{m}' for m in methods]
     p=run([test,'-m','pytest',*targets,'-v','-ra','--timeout=30',f'--junitxml={out}/upstream.xml'],check=False)
     (out/'test-scope.json').write_text(json.dumps({'selected':targets,'excluded':'all other upstream modules and Process methods; bounded no-admin self/owned-child audit, not full psutil suite'},indent=2))
 else:
     tests=root/'tests';shutil.copytree(source/'tests',tests,dirs_exist_ok=True)
     if (source/'setup.cfg').exists():shutil.copy2(source/'setup.cfg',root/'setup.cfg')
-    p=run([test,'-m','pytest',tests,'-v','-ra','--timeout=45',f'--junitxml={out}/upstream.xml'],check=False,timeout=900)
+    if name=='watchdog':
+        # Diagnose the original failures without changing tests or suppressing warnings.
+        # Every original test still executes; the two problematic tests each get a
+        # fresh interpreter to distinguish persistent defects from shared state.
+        selections=[('main','not test_renaming_top_level_directory and not test_eventlet_monkey_patching'),('rename','test_renaming_top_level_directory'),('eventlet','test_eventlet_monkey_patching')]
+        results=[]
+        for label,selection in selections:
+            selected=[tests,'-k',selection] if label=='main' else [tests/('test_emitter.py' if label=='rename' else 'test_skip_repeats_queue.py')]
+            if label!='main':selected+=['-k',selection]
+            result=run([test,'-m','pytest',*selected,'-v','-ra','--timeout=45',f'--junitxml={out}/upstream-{label}.xml'],check=False,timeout=900)
+            results.append(result)
+        merged=ET.Element('testsuites')
+        for label,_ in selections:
+            for suite in ET.parse(out/f'upstream-{label}.xml').getroot():merged.append(suite)
+        ET.ElementTree(merged).write(out/'upstream.xml',encoding='utf-8',xml_declaration=True)
+        p=next((r for r in results if r.returncode),results[0])
+        (out/'test-scope.json').write_text(json.dumps({'selection':'all original tests, split into three interpreter processes; no source/assertion changes','parts':selections,'returncodes':[r.returncode for r in results]},indent=2))
+    else:
+        p=run([test,'-m','pytest',tests,'-v','-ra','--timeout=45',f'--junitxml={out}/upstream.xml'],check=False,timeout=900)
 if (out/'upstream.xml').exists():
     suites=ET.parse(out/'upstream.xml').getroot();cases=list(suites.iter('testcase'))
     summary={'cases':len(cases),'failures':sum(c.find('failure') is not None for c in cases),'errors':sum(c.find('error') is not None for c in cases),'skips':[{'name':c.get('name'),'reason':c.find('skipped').get('message'),'type':c.find('skipped').get('type')} for c in cases if c.find('skipped') is not None]}
