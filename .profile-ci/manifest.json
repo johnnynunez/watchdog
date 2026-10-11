@@ -1,0 +1,32 @@
+{
+  "base": "7d651ac556fbce7003e97912a2125a421f38e2af",
+  "original_wheel_sha256": "8337dedf2c70ace98d58c9ad35d0541a97722e3533a8e6b66ff5fe6d587b7a22",
+  "original_red_run": 38183635476,
+  "profile_scope": "Windows CPython 3.12; not an upstream full-suite pass or Linux Eventlet certification",
+  "runtime_source_changes": false,
+  "patches": [
+    {
+      "file": "0001-windows-rename-expectations.patch",
+      "sha256": "b0404a804a4206d7a7dc84fb7d2f318affd8b2e01485a1383ba941f5f34dc4a6",
+      "upstream_merge": "3f8a12f9cf6d9f8091e05b61952409ed9623257d"
+    },
+    {
+      "file": "0002-eventlet-isolated-linux-tests.patch",
+      "sha256": "3afcbfa67b4fbb3eba2c7822fd4c0c9556beaf507a6a2ad0d7460f50b3cf7920",
+      "upstream_merge": "29393f418428e88f23b42ece03f3a9d44bb9a3e7"
+    }
+  ],
+  "not_backported": [
+    "#1151 events_checker broad refactor and reader-thread runtime change",
+    "#1070 inotify_c and SkipRepeatsQueue product changes"
+  ],
+  "eventlet_mapping": {
+    "original": "test_skip_repeats_queue.py::test_eventlet_monkey_patching",
+    "replacement": [
+      "test_isolated.py::test_eventlet_skip_repeat_queue",
+      "test_isolated.py::test_observer_stops_in_eventlet"
+    ],
+    "windows_result_required": "2 explicit Linux-only skips"
+  },
+  "rename_adaptation": "Retain 4.0 exact event equality/order/synthetic flag, only add not-Windows guard after mkdir(a/b), and require Windows DirModifiedEvent(a2) after directory move, both upstream #1151 expectations."
+}

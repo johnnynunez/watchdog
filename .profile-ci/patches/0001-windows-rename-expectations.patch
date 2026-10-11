@@ -1,0 +1,21 @@
+--- a/tests/test_emitter.py
++++ b/tests/test_emitter.py
+@@ -462,7 +462,8 @@
+ 
+     mkdir(p("a", "b"))
+     expect_event(DirCreatedEvent(p("a", "b")))
+-    expect_event(DirModifiedEvent(p("a")))
++    if not platform.is_windows():
++        expect_event(DirModifiedEvent(p("a")))
+ 
+     mv(p("a"), p("a2"))
+     expect_event(DirMovedEvent(p("a"), p("a2")))
+@@ -470,6 +471,8 @@
+         expect_event(DirModifiedEvent(p()))
+         expect_event(DirModifiedEvent(p()))
+     expect_event(DirMovedEvent(p("a", "b"), p("a2", "b"), is_synthetic=True))
++    if platform.is_windows():
++        expect_event(DirModifiedEvent(p("a2")))
+ 
+     if platform.is_bsd():
+         expect_event(DirModifiedEvent(p()))

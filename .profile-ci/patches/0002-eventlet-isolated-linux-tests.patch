@@ -1,0 +1,152 @@
+--- a/tests/test_skip_repeats_queue.py
++++ b/tests/test_skip_repeats_queue.py
+@@ -102,13 +102,3 @@
+     assert e1 == q.get()
+     assert q.empty()
+ 
+-
+-@cpython_only
+-def test_eventlet_monkey_patching():
+-    try:
+-        import eventlet  # type: ignore[import-untyped]
+-    except Exception:
+-        pytest.skip("eventlet not installed")
+-
+-    eventlet.monkey_patch()
+-    basic_actions()
+--- /dev/null
++++ b/tests/test_isolated.py
+@@ -0,0 +1,24 @@
++import pytest
++import importlib
++
++from watchdog.utils import platform
++
++from .utils import run_isolated_test
++
++
++# Kqueue isn't supported by Eventlet, so BSD is out
++# Current usage ReadDirectoryChangesW on Windows is blocking, though async may be possible
++@pytest.mark.skipif(not platform.is_linux(), reason="Eventlet only supported in Linux")
++def test_observer_stops_in_eventlet():
++    if not importlib.util.find_spec('eventlet'):
++        pytest.skip("eventlet not installed")
++
++    run_isolated_test('eventlet_observer_stops.py')
++
++
++@pytest.mark.skipif(not platform.is_linux(), reason="Eventlet only supported in Linux")
++def test_eventlet_skip_repeat_queue():
++    if not importlib.util.find_spec('eventlet'):
++        pytest.skip("eventlet not installed")
++
++    run_isolated_test('eventlet_skip_repeat_queue.py')
+--- /dev/null
++++ b/tests/isolated/eventlet_observer_stops.py
+@@ -0,0 +1,30 @@
++if __name__ == '__main__':
++    import eventlet
++
++    eventlet.monkey_patch()
++
++    import signal
++    import sys
++    import tempfile
++
++    from watchdog.observers import Observer
++    from watchdog.events import LoggingEventHandler
++
++    with tempfile.TemporaryDirectory() as temp_dir:
++        def run_observer():
++            event_handler = LoggingEventHandler()
++            observer = Observer()
++            observer.schedule(event_handler, temp_dir)
++            observer.start()
++            eventlet.sleep(1)
++            observer.stop()
++
++        def on_alarm(signum, frame):
++            print("Observer.stop() never finished!", file=sys.stderr)
++            sys.exit(1)
++
++        signal.signal(signal.SIGALRM, on_alarm)
++        signal.alarm(4)
++
++        thread = eventlet.spawn(run_observer)
++        thread.wait()
+--- /dev/null
++++ b/tests/isolated/eventlet_skip_repeat_queue.py
+@@ -0,0 +1,33 @@
++if __name__ == '__main__':
++    import eventlet
++
++    eventlet.monkey_patch()
++
++    from watchdog.utils.bricks import SkipRepeatsQueue
++
++    q = SkipRepeatsQueue(10)
++    q.put('A')
++    q.put('A')
++    q.put('A')
++    q.put('A')
++    q.put('B')
++    q.put('A')
++
++    value = q.get()
++    assert value == 'A'
++    q.task_done()
++
++    assert q.unfinished_tasks == 2
++
++    value = q.get()
++    assert value == 'B'
++    q.task_done()
++
++    assert q.unfinished_tasks == 1
++
++    value = q.get()
++    assert value == 'A'
++    q.task_done()
++
++    assert q.empty()
++    assert q.unfinished_tasks == 0
+--- a/tests/utils.py
++++ b/tests/utils.py
+@@ -2,6 +2,7 @@
+ 
+ import dataclasses
+ import os
++import subprocess
+ import sys
+ from queue import Empty, Queue
+ from typing import List, Optional, Tuple, Type, Union
+@@ -106,3 +107,29 @@
+         alive = [emitter.is_alive() for emitter in self.emitters]
+         self.emitters = []
+         assert alive == [False] * len(alive)
++
++
++def run_isolated_test(path):
++    ISOALTED_TEST_PREFIX = os.path.join('tests', 'isolated')
++    path = os.path.abspath(os.path.join(ISOALTED_TEST_PREFIX, path))
++
++    src_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'src')
++    new_env = os.environ.copy()
++    new_env['PYTHONPATH'] = os.pathsep.join(sys.path + [src_dir])
++
++    new_argv = [sys.executable, path]
++
++    p = subprocess.Popen(
++        new_argv,
++        env=new_env,
++    )
++
++    # in case test goes haywire, don't let it run forever
++    timeout = 10
++    try:
++        p.communicate(timeout=timeout)
++    except subprocess.TimeoutExpired:
++        p.kill()
++        assert False, 'timed out'
++
++    assert p.returncode == 0

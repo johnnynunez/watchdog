@@ -1,0 +1,46 @@
+name: Watchdog 4.0 isolated test-backport profile
+on:
+  push:
+    branches: [ci/watchdog40-test-profile-20261012]
+permissions:
+  contents: read
+jobs:
+  profile:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-11-arm
+            arch: arm64
+          - runner: windows-2025
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: harness
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: gorakhargosh/watchdog
+          ref: 7d651ac556fbce7003e97912a2125a421f38e2af
+          path: release-source
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12.10'
+          architecture: ${{ matrix.arch }}
+      - name: Original RED versus justified test-only profile
+        shell: pwsh
+        env:
+          PYTHONUTF8: '1'
+          PYTHONNOUSERSITE: '1'
+        run: python harness/.profile-ci/lane.py '${{ matrix.arch }}'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: watchdog40-test-profile-${{ matrix.arch }}
+          path: profile-work/artifacts
+          if-no-files-found: error
+          retention-days: 14
