@@ -1,0 +1,94 @@
+# Fork-only verification (not proposed upstream): watchdog on native Windows ARM64.
+name: Verify Windows ARM64
+
+on:
+  push:
+    branches:
+      - verify/windows-arm64
+
+permissions:
+  contents: read
+
+jobs:
+  upstream-tests:
+    name: tox py ${{ matrix.python }} windows-11-arm
+    runs-on: windows-11-arm
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13", "3.14", "3.14t"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Interpreter
+        run: python -c "import sys, sysconfig, platform; print(sys.version, sysconfig.get_platform(), platform.machine()); assert sysconfig.get_platform() == 'win-arm64'"
+      - run: python -m pip install tox
+      - name: Run upstream tests (same command as tests.yml)
+        run: python -m tox -q -e py -- -p no:cacheprovider --junitxml=junit-${{ matrix.python }}.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: junit-${{ matrix.python }}
+          path: junit-*.xml
+
+  pypi-release-sdist:
+    name: watchdog 6.0.0 from PyPI on windows-11-arm py${{ matrix.python }}
+    runs-on: windows-11-arm
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.14"]
+    steps:
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install released watchdog in a fresh venv and smoke-test the Windows observer
+        shell: pwsh
+        run: |
+          python -m venv $env:RUNNER_TEMP\v
+          $py = "$env:RUNNER_TEMP\v\Scripts\python.exe"
+          & $py -m pip install -U pip
+          & $py -m pip install -v "watchdog==6.0.0" 2>&1 | Select-String -Pattern "watchdog-6.0.0|Building wheel|Created wheel|Successfully installed"
+          if ($LASTEXITCODE) { exit 1 }
+          $code = @'
+          import pathlib, sys, sysconfig, tempfile, time, queue
+          import watchdog, watchdog.observers
+          from importlib.metadata import distribution
+          from watchdog.events import FileSystemEventHandler
+          print(sys.version, sysconfig.get_platform())
+          assert sysconfig.get_platform() == "win-arm64"
+          dist = distribution("watchdog")
+          print("installed", dist.version, [p for p in dist.files if str(p).endswith((".pyd", ".dll"))])
+          wheel = (pathlib.Path(dist._path) / "WHEEL").read_text()
+          print(wheel)
+          from watchdog.observers import Observer
+          from watchdog.observers.read_directory_changes import WindowsApiObserver
+          assert Observer is WindowsApiObserver, Observer
+          q = queue.Queue()
+          class H(FileSystemEventHandler):
+              def on_any_event(self, e):
+                  q.put((e.event_type, pathlib.Path(e.src_path).name))
+          with tempfile.TemporaryDirectory() as d:
+              obs = Observer(); obs.schedule(H(), d, recursive=True); obs.start()
+              time.sleep(0.5)
+              p = pathlib.Path(d, "a.txt"); p.write_text("x")
+              p.write_text("y")
+              p2 = p.rename(pathlib.Path(d, "b.txt"))
+              p2.unlink()
+              seen = set(); deadline = time.time() + 10
+              while time.time() < deadline and not {"created", "modified", "moved", "deleted"} <= {t for t, _ in seen}:
+                  try: seen.add(q.get(timeout=0.5))
+                  except queue.Empty: pass
+              obs.stop(); obs.join(10)
+              assert not obs.is_alive()
+          print(sorted(seen))
+          assert {"created", "modified", "moved", "deleted"} <= {t for t, _ in seen}
+          print("OK")
+          '@
+          $code | Set-Content -Encoding utf8 smoke.py
+          & $py smoke.py
+          if ($LASTEXITCODE) { exit 1 }
